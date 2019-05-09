@@ -37,12 +37,8 @@
 #include "modules/planning/common/frame.h"
 #include "modules/planning/common/planning_gflags.h"
 #include "modules/planning/constraint_checker/constraint_checker.h"
-#include "modules/planning/tasks/optimizers/dp_poly_path/dp_poly_path_optimizer.h"
 #include "modules/planning/tasks/optimizers/dp_st_speed/dp_st_speed_optimizer.h"
 #include "modules/planning/tasks/optimizers/path_decider/path_decider.h"
-#include "modules/planning/tasks/optimizers/qp_piecewise_jerk_path/qp_piecewise_jerk_path_optimizer.h"
-#include "modules/planning/tasks/optimizers/qp_spline_path/qp_spline_path_optimizer.h"
-#include "modules/planning/tasks/optimizers/qp_spline_st_speed/qp_spline_st_speed_optimizer.h"
 #include "modules/planning/tasks/optimizers/speed_decider/speed_decider.h"
 
 namespace apollo {
@@ -272,18 +268,20 @@ void LaneFollowStage::PlanFallbackTrajectory(
     reference_line_info->set_trajectory_type(ADCTrajectory::PATH_FALLBACK);
   }
 
-  // TODO(Jinyun): Use last successful path data to do speed fallback
   if (reference_line_info->trajectory_type() != ADCTrajectory::PATH_FALLBACK) {
-    const auto& candidate_path_data =
-        reference_line_info->GetCandidatePathData();
-    for (const auto& path_data : candidate_path_data) {
-      if (path_data.path_label().find("self") != std::string::npos) {
-        *reference_line_info->mutable_path_data() = path_data;
-        break;
+    if (!RetrieveLastFramePathProfile(
+            reference_line_info, frame,
+            reference_line_info->mutable_path_data())) {
+      const auto& candidate_path_data =
+          reference_line_info->GetCandidatePathData();
+      for (const auto& path_data : candidate_path_data) {
+        if (path_data.path_label().find("self") != std::string::npos) {
+          *reference_line_info->mutable_path_data() = path_data;
+          AERROR << "Use current frame self lane path as fallback ";
+          break;
+        }
       }
     }
-    AERROR << "reference_line_info->path_data() "
-           << reference_line_info->path_data().path_label();
   }
 
   AERROR << "Speed fallback due to algorithm failure";
@@ -346,14 +344,9 @@ bool LaneFollowStage::RetrieveLastFramePathProfile(
         << "Last frame doesn't succeed, fail to retrieve last frame path data";
     return false;
   }
-  const auto& last_frame_trajectory_pb =
-      ptr_last_frame->current_frame_planned_trajectory();
 
-  DiscretizedPath last_frame_discretized_path;
-  for (const auto& trajectory_point :
-       last_frame_trajectory_pb.trajectory_point()) {
-    last_frame_discretized_path.push_back(trajectory_point.path_point());
-  }
+  const auto& last_frame_discretized_path =
+      ptr_last_frame->current_frame_planned_path();
 
   path_data->SetDiscretizedPath(last_frame_discretized_path);
   const auto adc_frenet_frame_point_ =
@@ -366,6 +359,7 @@ bool LaneFollowStage::RetrieveLastFramePathProfile(
            << adc_frenet_frame_point_.ShortDebugString();
     return false;
   }
+  AERROR << "Use last frame good path to do speed fallback";
   return true;
 }
 

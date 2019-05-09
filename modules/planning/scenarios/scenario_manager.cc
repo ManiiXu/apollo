@@ -316,7 +316,7 @@ ScenarioConfig::ScenarioType ScenarioManager::SelectTrafficLightScenario(
              << "] start_s[" << traffic_light_overlap.start_s << "] color["
              << signal_color << "]";
 
-      if (signal_color == perception::TrafficLight::RED) {
+      if (signal_color != perception::TrafficLight::GREEN) {
         red_light = true;
         break;
       }

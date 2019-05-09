@@ -80,6 +80,10 @@ class PiecewiseJerkProblem {
     x_end_ = x_end;
   }
 
+  void SetZeroOrderReference(std::vector<double> x_ref);
+
+  void SetFirstOrderPenalty(std::vector<double> penalty_dx);
+
   void SetZeroOrderBounds(std::vector<std::pair<double, double>> x_bounds);
 
   void SetFirstOrderBounds(std::vector<std::pair<double, double>> dx_bounds);
@@ -161,6 +165,7 @@ class PiecewiseJerkProblem {
   std::array<double, 3> x_init_;
   std::array<double, 3> x_end_;
   std::vector<double> x_ref_;
+  std::vector<double> penalty_dx_;
   std::vector<std::pair<double, double>> x_bounds_;
   std::vector<std::pair<double, double>> dx_bounds_;
   std::vector<std::pair<double, double>> ddx_bounds_;

@@ -25,11 +25,6 @@
 namespace apollo {
 namespace planning {
 
-void PathTimeQpProblem::SetRefX(std::vector<double> x_ref) {
-  CHECK_EQ(x_ref.size(), num_of_knots_);
-  x_ref_ = std::move(x_ref);
-}
-
 void PathTimeQpProblem::CalculateKernel(std::vector<c_float>* P_data,
                                         std::vector<c_int>* P_indices,
                                         std::vector<c_int>* P_indptr) {
@@ -51,7 +46,8 @@ void PathTimeQpProblem::CalculateKernel(std::vector<c_float>* P_data,
 
   // x(i)'^2 * w_dx
   for (int i = 0; i < N; ++i) {
-    columns[N + i].emplace_back(N + i, weight_.x_derivative_w);
+    columns[N + i].emplace_back(
+        N + i, weight_.x_derivative_w * (1.0 + penalty_dx_[i]));
     ++value_index;
   }
 
@@ -97,9 +93,6 @@ void PathTimeQpProblem::CalculateOffset(std::vector<c_float>* q) {
   const int N = static_cast<int>(num_of_knots_);
   const int kNumParam = 3 * N;
   q->resize(kNumParam);
-  for (int i = 0; i < kNumParam; ++i) {
-    q->at(i) = 0.0;
-  }
   for (int i = 0; i < N; ++i) {
     q->at(i) += -2.0 * weight_.x_ref_w * x_ref_[i];
     q->at(N + i) += -2.0 * weight_.x_derivative_w * x_derivative_desire;

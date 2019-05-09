@@ -31,6 +31,8 @@
 #include "modules/common/util/util.h"
 #include "modules/map/hdmap/hdmap_util.h"
 #include "modules/planning/common/path_boundary.h"
+#include "modules/planning/common/planning_context.h"
+#include "modules/planning/common/planning_gflags.h"
 #include "modules/planning/tasks/deciders/path_decider_obstacle_utils.h"
 
 namespace apollo {
@@ -107,6 +109,8 @@ Status PathBoundsDecider::Process(
     lane_borrow_info_list = {LaneBorrowInfo::NO_BORROW};
   }
   // Try every possible lane-borrow option:
+  PathBound regular_self_path_bound;
+  bool exist_self_path_bound = false;
   for (const auto& lane_borrow_info : lane_borrow_info_list) {
     PathBound regular_path_bound;
     std::string blocking_obstacle_id = "";
@@ -141,6 +145,8 @@ Status PathBoundsDecider::Process(
         break;
       default:
         path_label = "self";
+        exist_self_path_bound = true;
+        regular_self_path_bound = regular_path_bound;
         break;
     }
     candidate_path_boundaries.back().set_label(
@@ -149,8 +155,35 @@ Status PathBoundsDecider::Process(
         blocking_obstacle_id);
   }
 
-  // Remove redundant boundaries
+  // Remove redundant boundaries.
   RemoveRedundantPathBoundaries(&candidate_path_boundaries);
+
+  auto* pull_over_info = PlanningContext::Instance()
+                             ->mutable_planning_status()
+                             ->mutable_pull_over();
+  // If needed, search for pull-over position.
+  if (Decider::config_.path_bounds_decider_config().is_pull_over()) {
+    if (!exist_self_path_bound) {
+      pull_over_info->set_exist_pull_over_position(false);
+    } else {
+      // TODO(QiL, Jiacheng): simplify the interface for
+      // 'SearchPullOverPosition' and use proto directly
+      std::tuple<double, double, double, double, double>
+          pull_over_configuration;
+      if (!SearchPullOverPosition(*reference_line_info, regular_self_path_bound,
+                                  &pull_over_configuration)) {
+        pull_over_info->set_exist_pull_over_position(false);
+      } else {
+        pull_over_info->set_exist_pull_over_position(true);
+        pull_over_info->set_pull_over_s(std::get<0>(pull_over_configuration));
+        pull_over_info->set_pull_over_l(std::get<1>(pull_over_configuration));
+        pull_over_info->set_pull_over_x(std::get<2>(pull_over_configuration));
+        pull_over_info->set_pull_over_y(std::get<3>(pull_over_configuration));
+        pull_over_info->set_pull_over_theta(
+            std::get<4>(pull_over_configuration));
+      }
+    }
+  }
 
   // Success
   reference_line_info->SetCandidatePathBoundaries(candidate_path_boundaries);
@@ -274,6 +307,107 @@ std::string PathBoundsDecider::GenerateFallbackPathBound(
   return "";
 }
 
+bool PathBoundsDecider::SearchPullOverPosition(
+    const ReferenceLineInfo& reference_line_info,
+    const std::vector<std::tuple<double, double, double>>& path_bound,
+    std::tuple<double, double, double, double, double>* const
+        pull_over_configuration) {
+  double adc_end_s = reference_line_info.AdcSlBoundary().end_s();
+  double destination_s =
+      reference_line_info.SDistanceToDestination() + adc_end_s;
+  // Check if destination is some distance away from ADC.
+  if (destination_s - adc_end_s < FLAGS_destination_to_adc_buffer) {
+    AWARN << "Destination is too close to ADC.";
+    return false;
+  }
+  // Check if destination is within path-bounds searching scope.
+  if (destination_s + FLAGS_destination_to_pathend_buffer >=
+      std::get<0>(path_bound.back())) {
+    AWARN << "Destination is not within path-bounds searching scope.";
+    return false;
+  }
+
+  // Search for a feasible location for pull-over.
+  const double pull_over_space_length =
+      VehicleConfigHelper::GetConfig().vehicle_param().length() * 2.0;
+  const double adc_half_width =
+      VehicleConfigHelper::GetConfig().vehicle_param().width() / 2.0;
+  int i = static_cast<int>(path_bound.size()) - 1;
+  // 1. Locate the first point before destination.
+  while (i >= 0 && std::get<0>(path_bound[i]) > destination_s) {
+    --i;
+  }
+  // 2. Find a window that is close to road-edge.
+  bool has_a_feasible_window = false;
+  while (i >= 0 &&
+         std::get<0>(path_bound[i]) - std::get<0>(path_bound.front()) >
+             pull_over_space_length) {
+    int j = i;
+    bool is_feasible_window = true;
+    while (j >= 0 && std::get<0>(path_bound[i]) - std::get<0>(path_bound[j]) <
+                         pull_over_space_length) {
+      double curr_s = std::get<0>(path_bound[j]);
+      double curr_right_bound = std::fabs(std::get<1>(path_bound[j]));
+      double curr_lane_left_width = 0;
+      double curr_lane_right_width = 0;
+      reference_line_info.reference_line().GetLaneWidth(
+          curr_s, &curr_lane_left_width, &curr_lane_right_width);
+      if (std::fabs(curr_right_bound + adc_half_width - curr_lane_right_width) >
+          FLAGS_pull_over_road_edge_buffer) {
+        ADEBUG << "Not close enough to lane-edge -> "
+               << "Not feasible for pull-over.";
+        is_feasible_window = false;
+        break;
+      }
+      double curr_neighbor_lane_width = 0.0;
+      hdmap::Id neighbor_lane_id;
+      if (reference_line_info.GetNeighborLaneInfo(LaneType::RightForward,
+                                                  curr_s, &neighbor_lane_id,
+                                                  &curr_neighbor_lane_width) ||
+          reference_line_info.GetNeighborLaneInfo(LaneType::RightReverse,
+                                                  curr_s, &neighbor_lane_id,
+                                                  &curr_neighbor_lane_width)) {
+        ADEBUG << "Not the rightmost lane -> Not feasible for pull-over.";
+        is_feasible_window = false;
+        break;
+      }
+      --j;
+    }
+    if (j < 0) {
+      return false;
+    }
+    if (is_feasible_window) {
+      has_a_feasible_window = true;
+      const auto& reference_line = reference_line_info.reference_line();
+      const auto& pull_over_bound = path_bound[(i + j) / 2];
+      const double pull_over_s = std::get<0>(pull_over_bound);
+      const double pull_over_l = std::get<1>(pull_over_bound);
+      common::SLPoint pull_over_sl_point;
+      pull_over_sl_point.set_s(pull_over_s);
+      pull_over_sl_point.set_l(pull_over_l);
+
+      common::math::Vec2d pull_over_xy_point;
+      reference_line.SLToXY(pull_over_sl_point, &pull_over_xy_point);
+      double pull_over_x = pull_over_xy_point.x();
+      double pull_over_y = pull_over_xy_point.y();
+
+      const auto& reference_point =
+          reference_line.GetReferencePoint(pull_over_s);
+      double pull_over_theta = reference_point.heading();
+
+      std::get<0>(*pull_over_configuration) = pull_over_s;
+      std::get<1>(*pull_over_configuration) = pull_over_l;
+      std::get<2>(*pull_over_configuration) = pull_over_x;
+      std::get<3>(*pull_over_configuration) = pull_over_y;
+      std::get<4>(*pull_over_configuration) = pull_over_theta;
+      break;
+    }
+    --i;
+  }
+
+  return has_a_feasible_window;
+}
+
 void PathBoundsDecider::RemoveRedundantPathBoundaries(
     std::vector<PathBoundary>* const candidate_path_boundaries) {
   // 1. Check to see if both "left" and "right" exist.
@@ -391,6 +525,10 @@ bool PathBoundsDecider::GetBoundaryFromLanesAndADC(
       curr_lane_left_width = past_lane_left_width;
       curr_lane_right_width = past_lane_right_width;
     } else {
+      double offset_to_lane_center = 0.0;
+      reference_line.GetOffsetToMap(curr_s, &offset_to_lane_center);
+      curr_lane_left_width += offset_to_lane_center;
+      curr_lane_right_width -= offset_to_lane_center;
       past_lane_left_width = curr_lane_left_width;
       past_lane_right_width = curr_lane_right_width;
     }
@@ -430,7 +568,7 @@ bool PathBoundsDecider::GetBoundaryFromLanesAndADC(
 
     // 3. Calculate the proper boundary based on lane-width, ADC's position,
     //    and ADC's velocity.
-    constexpr double kMaxLateralAccelerations = 1.0;
+    constexpr double kMaxLateralAccelerations = 2.0;
     double offset_to_map = 0.0;
     reference_line.GetOffsetToMap(curr_s, &offset_to_map);
 

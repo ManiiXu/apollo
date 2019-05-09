@@ -42,8 +42,8 @@ Status PathLaneBorrowDecider::Process(
   // By default, don't borrow any lane.
   reference_line_info->set_is_path_lane_borrow(false);
   // Check if lane-borrowing is needed, if so, borrow lane.
-  if (Decider::config_.path_lane_borrow_decider_config().
-          allow_lane_borrowing() &&
+  if (Decider::config_.path_lane_borrow_decider_config()
+          .allow_lane_borrowing() &&
       IsNecessaryToBorrowLane(*frame, *reference_line_info)) {
     reference_line_info->set_is_path_lane_borrow(true);
   }
@@ -147,6 +147,7 @@ bool PathLaneBorrowDecider::IsBlockingObstacleFarFromIntersection(
   // Get blocking obstacle's s.
   double blocking_obstacle_s =
       blocking_obstacle->PerceptionSLBoundary().end_s();
+  ADEBUG << "Blocking obstacle is at s = " << blocking_obstacle_s;
   // Get intersection's s and compare with threshold.
   const auto& first_encountered_overlaps =
       reference_line_info.FirstEncounteredOverlaps();
@@ -161,7 +162,8 @@ bool PathLaneBorrowDecider::IsBlockingObstacleFarFromIntersection(
     }
 
     auto distance = overlap.second.start_s - blocking_obstacle_s;
-    if (overlap.first == ReferenceLineInfo::SIGNAL) {
+    if (overlap.first == ReferenceLineInfo::SIGNAL ||
+        overlap.first == ReferenceLineInfo::STOP_SIGN) {
       if (distance < kIntersectionClearanceDist) {
         ADEBUG << "Too close to signal intersection (" << distance
                << "m); don't SIDE_PASS.";

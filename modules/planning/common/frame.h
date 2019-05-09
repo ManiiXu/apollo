@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -130,24 +131,13 @@ class Frame {
     return current_frame_planned_trajectory_;
   }
 
-  // TODO(Qi, Jinyun): check the usage in open space planner
-  //                   and remove it from frame
-  planning_internal::OpenSpaceDebug *mutable_open_space_debug() {
-    return &open_space_debug_;
+  void set_current_frame_planned_path(
+      DiscretizedPath current_frame_planned_path) {
+    current_frame_planned_path_ = std::move(current_frame_planned_path);
   }
 
-  const planning_internal::OpenSpaceDebug &open_space_debug() {
-    return open_space_debug_;
-  }
-
-  // TODO(Qi, Jinyun): check the usage in open space planner
-  //                   and remove it from frame
-  std::vector<common::TrajectoryPoint> *mutable_last_stitching_trajectory() {
-    return &stitching_trajectory_;
-  }
-
-  const std::vector<common::TrajectoryPoint> &last_stitching_trajectory() {
-    return stitching_trajectory_;
+  const DiscretizedPath &current_frame_planned_path() const {
+    return current_frame_planned_path_;
   }
 
   const bool is_near_destination() const { return is_near_destination_; }
@@ -213,12 +203,12 @@ class Frame {
       traffic_lights_;
 
   ChangeLaneDecider change_lane_decider_;
-  ADCTrajectory current_frame_planned_trajectory_;  // last published trajectory
 
-  // debug info for open space planner
-  planning_internal::OpenSpaceDebug open_space_debug_;
-  // stitching trajectory for open space planner
-  std::vector<common::TrajectoryPoint> stitching_trajectory_;
+  // current frame published trajectory
+  ADCTrajectory current_frame_planned_trajectory_;
+
+  // current frame path for future possible speed fallback
+  DiscretizedPath current_frame_planned_path_;
 
   const ReferenceLineProvider *reference_line_provider_ = nullptr;
 
@@ -227,6 +217,8 @@ class Frame {
   std::vector<routing::LaneWaypoint> future_route_waypoints_;
 
   common::monitor::MonitorLogBuffer monitor_logger_buffer_;
+
+  std::tuple<bool, double, double, double> pull_over_info_;
 };
 
 class FrameHistory : public IndexedQueue<uint32_t, Frame> {

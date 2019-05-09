@@ -56,8 +56,6 @@ class PathTimeQpProblem : public PiecewiseJerkProblem {
     x_derivative_desire = dx_desire;
   }
 
-  void SetRefX(std::vector<double> x_ref);
-
  protected:
   // naming convention follows osqp solver.
   void CalculateKernel(std::vector<c_float>* P_data,

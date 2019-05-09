@@ -37,6 +37,7 @@ namespace apollo {
 namespace planning {
 
 using apollo::common::ErrorCode;
+using apollo::common::PathPoint;
 using apollo::common::SpeedPoint;
 using apollo::common::Status;
 using apollo::common::TrajectoryPoint;
@@ -78,9 +79,9 @@ Status PiecewiseJerkSpeedOptimizer::Process(
   const auto& piecewise_jerk_speed_config =
       config_.piecewise_jerk_speed_config();
   std::array<double, 5> w = {piecewise_jerk_speed_config.s_weight(),
-                             piecewise_jerk_speed_config.ds_weight(),
-                             piecewise_jerk_speed_config.dds_weight(),
-                             piecewise_jerk_speed_config.ddds_weight(),
+                             piecewise_jerk_speed_config.velocity_weight(),
+                             piecewise_jerk_speed_config.acc_weight(),
+                             piecewise_jerk_speed_config.jerk_weight(),
                              piecewise_jerk_speed_config.ref_weight()};
   double total_length = st_graph_data.path_length_by_conf();
   double total_time = st_graph_data.total_time_by_conf();
@@ -140,20 +141,30 @@ Status PiecewiseJerkSpeedOptimizer::Process(
 
   // Update SpeedBoundary and ref_s
   std::vector<double> x_ref;
+  std::vector<double> penalty_dx;
   std::vector<std::tuple<double, double, double>> dx_bounds;
   const SpeedLimit& speed_limit = st_graph_data.speed_limit();
   for (int i = 0; i < num_of_knots; ++i) {
     double curr_t = i * delta_t;
-    double v_lower_bound = 0.0;
-    double v_upper_bound = FLAGS_planning_upper_speed_limit;
+    // get path_s
     SpeedPoint sp;
     reference_speed_data.EvaluateByTime(curr_t, &sp);
-    v_upper_bound = speed_limit.GetSpeedLimitByS(sp.s());
-    x_ref.emplace_back(sp.s());
+    const double path_s = sp.s();
+    x_ref.emplace_back(path_s);
+    // get curvature
+    PathPoint path_point;
+    path_data.GetPathPointWithPathS(path_s, &path_point);
+    penalty_dx.emplace_back(fabs(path_point.kappa()) *
+                            piecewise_jerk_speed_config.kappa_penalty_weight());
+    // get v_upper_bound
+    const double v_lower_bound = 0.0;
+    double v_upper_bound = FLAGS_planning_upper_speed_limit;
+    v_upper_bound = speed_limit.GetSpeedLimitByS(path_s);
     dx_bounds.emplace_back(curr_t, v_lower_bound,
                            std::fmax(v_upper_bound, 0.0));
   }
-  path_time_qp->SetRefX(x_ref);
+  path_time_qp->SetZeroOrderReference(x_ref);
+  path_time_qp->SetFirstOrderPenalty(penalty_dx);
   path_time_qp->SetVariableDerivativeBounds(dx_bounds);
 
   // Sovle the problem
